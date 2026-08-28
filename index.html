@@ -3006,10 +3006,6 @@ showPage('scale');
   function buildPhrase(chords){
     if(!chords.length)return [];
 
-    // Always return the same bar-object structure.
-    // 3 chords -> 1 bar + 1 bar + 2-bar tonic hold.
-    // 4 chords -> 1 bar each.
-    // 5 chords -> last bar split 2 beats + 2 beats.
     if(chords.length===3){
       return [
         {chords:[chords[0]],beats:[4]},
@@ -3017,11 +3013,9 @@ showPage('scale');
         {chords:[chords[2]],beats:[8]}
       ];
     }
-
     if(chords.length===4){
       return chords.map(c=>({chords:[c],beats:[4]}));
     }
-
     if(chords.length===5){
       return [
         {chords:[chords[0]],beats:[4]},
@@ -3030,17 +3024,18 @@ showPage('scale');
         {chords:[chords[3],chords[4]],beats:[2,2]}
       ];
     }
+    if(chords.length===6){
+      // One 4/4 bar: 1 | 2+3 | 4 | 5+6
+      return [{chords:chords.slice(),beats:[1,.5,.5,1,.5,.5]}];
+    }
 
-    // Generic >5 fallback: preserve all chords and distribute them over
-    // exactly 16 quarter-note beats, with no zero-length chord.
-    const total=16, n=chords.length;
-    const base=Math.floor(total/n), rem=total%n;
-    const out=[];
+    const total=16,n=chords.length;
+    const base=Math.floor(total/n),rem=total%n,result=[];
     for(let i=0;i<n;i++){
       const beats=base+(i<rem?1:0);
-      if(beats>0)out.push({chords:[chords[i]],beats:[beats]});
+      if(beats>0)result.push({chords:[chords[i]],beats:[beats]});
     }
-    return out;
+    return result;
   }
 
   function flattenPhrase(phrase){
@@ -3065,32 +3060,31 @@ showPage('scale');
     phraseEvents=[];
     let beat=0;
 
-    // Six-chord progression:
-    // [1 beat] [2+3 = 1 beat] [1 beat] [5+6 = 1 beat].
-    // That makes one 4/4 cycle. The normal phrase is 4 bars (16 beats),
-    // so repeat the six-chord cycle across all four bars instead of
-    // accidentally making the whole phrase only one quarter as long.
     if(chords.length===6){
-      const six=[1,.5,.5,1,.5,.5];
-      for(let cycle=0;cycle<4;cycle++){
-        const cycleStart=cycle*4;
-        chords.forEach((chord,i)=>{
-          const d=six[i];
+      // Repeat the six-chord 4/4 cell for all four bars.
+      for(let bar=0;bar<4;bar++){
+        let local=0;
+        flat.forEach(ev=>{
           phraseEvents.push({
-            chord:chord,
-            startBeat:cycleStart+six.slice(0,i).reduce((a,b)=>a+b,0),
-            durationBeats:d
+            chord:ev.chord,
+            startBeat:bar*4+local,
+            durationBeats:ev.beats
           });
+          local+=ev.beats;
         });
       }
     }else{
-      for(const ev of flat){
-        phraseEvents.push({chord:ev.chord,startBeat:beat,durationBeats:ev.beats});
+      flat.forEach(ev=>{
+        phraseEvents.push({
+          chord:ev.chord,
+          startBeat:beat,
+          durationBeats:ev.beats
+        });
         beat+=ev.beats;
-      }
+      });
     }
 
-    phraseDuration=16; // 4/4 × 4 bars
+    phraseDuration=16;
     return phraseEvents;
   }
 
