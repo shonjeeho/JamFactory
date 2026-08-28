@@ -2667,116 +2667,107 @@ showPage('scale');
   const NOTE_INDEX={
     'C':0,'C♯':1,'C#':1,'D♭':1,'Db':1,'D':2,'D♯':3,'D#':3,'E♭':3,'Eb':3,'E':4,
     'F':5,'F♯':6,'F#':6,'G♭':6,'Gb':6,'G':7,'G♯':8,'G#':8,'A♭':8,'Ab':8,
-    'A':9,'A♯':10,'A#':10,'B♭':10,'Bb':10,'B':11
+    'A':9,'A♯':10,'A#':10,'B♭':11,'Bb':11,'B':11
   };
   let previousVoicing=null;
 
   function chordPitchClasses(chord){
-    const m=String(chord||'').match(/^([A-G](?:♯|#|♭|b)?)(.*)$/);
+    const m=String(chord||'').trim().match(/^([A-G](?:♯|#|♭|b)?)(.*)$/);
     if(!m||NOTE_INDEX[m[1]]==null)return null;
     const root=NOTE_INDEX[m[1]], q=m[2].toLowerCase();
     let ints;
-    if(q.includes('dim'))ints=[0,3,6,9];
-    else if(q.includes('m7b5')||q.includes('ø'))ints=[0,3,6,10];
-    else if(q.includes('maj7'))ints=[0,4,7,11];
+    if(q.includes('m7b5')||q.includes('ø'))ints=[0,3,6,10];
+    else if(q.includes('dim'))ints=[0,3,6,9];
+    else if(q.includes('maj7')||q.includes('Δ'))ints=[0,4,7,11];
     else if(q.includes('m7'))ints=[0,3,7,10];
     else if(q.includes('7'))ints=[0,4,7,10];
     else if(q.includes('m'))ints=[0,3,7];
     else if(q.includes('aug')||q.includes('+'))ints=[0,4,8];
     else ints=[0,4,7];
-
-    return {root, pcs:ints.map(x=>(root+x)%12), quality:q};
+    return ints.map(x=>(root+x)%12);
   }
 
-  /*
-   * Compact 4-note voicings around C3-C5.
-   * We generate inversions/close-position variants and select the candidate
-   * requiring the least total movement from the previous chord. This creates
-   * continuous voice leading instead of resetting every chord to root position.
-   */
   function makeVoicing(chord){
-    const info=chordPitchClasses(chord);
-    if(!info)return null;
+    const pcs=chordPitchClasses(chord);
+    if(!pcs)return null;
 
-    const base=48; // C3
+    // Generate close-position inversions in a stable C3–C5-ish register.
     const candidates=[];
-    const pcs=info.pcs.slice(0,4);
-
-    for(let inversion=0;inversion<4;inversion++){
-      let arr=pcs.map((_,i)=>pcs[(i+inversion)%4]);
-      let midi=[];
-      let prev=base+((arr[0]-base)%12+12)%12;
-      midi.push(prev);
-      for(let i=1;i<4;i++){
-        let n=midi[i-1]+((arr[i]-midi[i-1])%12+12)%12;
-        if(n<=midi[i-1])n+=12;
-        midi.push(n);
+    for(let inv=0;inv<pcs.length;inv++){
+      const ordered=pcs.slice(inv).concat(pcs.slice(0,inv));
+      let arr=[60+((ordered[0]-0)%12+12)%12];
+      for(let i=1;i<ordered.length;i++){
+        let n=arr[i-1]+((ordered[i]-arr[i-1])%12+12)%12;
+        if(n<=arr[i-1])n+=12;
+        arr.push(n);
       }
-
-      // Try octave shifts so the voicing stays in a comfortable register.
       for(let shift=-12;shift<=12;shift+=12){
-        const c=midi.map(n=>n+shift);
-        if(c[0]>=48 && c[3]<=72){
-          candidates.push(c);
-        }
+        const c=arr.map(n=>n+shift);
+        if(c[0]>=48&&c[c.length-1]<=72)candidates.push(c);
       }
     }
 
     if(!previousVoicing){
-      // First chord: keep the voicing in a centered register.
-      return candidates.sort((a,b)=>{
-        const ca=a.reduce((s,n)=>s+n,0), cb=b.reduce((s,n)=>s+n,0);
-        return Math.abs(ca/4-60)-Math.abs(cb/4-60);
-      })[0] || null;
+      return candidates.sort((a,b)=>
+        Math.abs(a.reduce((x,y)=>x+y,0)/a.length-60)-
+        Math.abs(b.reduce((x,y)=>x+y,0)/b.length-60)
+      )[0]||null;
     }
 
-    let best=null,bestScore=Infinity;
+    let best=candidates[0],bestScore=Infinity;
     candidates.forEach(c=>{
-      const movement=c.reduce((s,n,i)=>s+Math.abs(n-previousVoicing[i]),0);
-      // Small penalty for very wide voicings.
-      const spread=c[3]-c[0];
-      const score=movement+Math.max(0,spread-18)*0.25;
+      // Compare voices by position, strongly favoring minimum movement.
+      const len=Math.min(c.length,previousVoicing.length);
+      let score=0;
+      for(let i=0;i<len;i++)score+=Math.abs(c[i]-previousVoicing[i]);
+      score+=Math.abs(c.reduce((a,b)=>a+b,0)/c.length-60)*.05;
       if(score<bestScore){bestScore=score;best=c;}
     });
     return best;
   }
 
-  // Compatibility helper for any older prototype references.
-  // Returns the current voicing as frequencies.
   function chordFrequencies(chord){
     const v=makeVoicing(chord);
-    if(!v)return null;
-    return v.map(midi=>440*Math.pow(2,(midi-69)/12));
+    return v?v.map(m=>440*Math.pow(2,(m-69)/12)):null;
   }
 
   function playChord(chord,when,duration){
-    const voicing=makeVoicing(chord);
-    if(!voicing)return;
-    previousVoicing=voicing.slice();
+    const v=makeVoicing(chord);
+    if(!v)return false;
+    previousVoicing=v.slice();
 
-    voicing.forEach((midi)=>{
-      const freq=440*Math.pow(2,(midi-69)/12);
-      const o=ctx.createOscillator(),g=ctx.createGain();
-      // A slightly richer two-layer timbre, still sample-free.
+    // Use a short piano-like attack plus sustained body.
+    v.forEach((midi,index)=>{
+      const f=440*Math.pow(2,(midi-69)/12);
+      const o=ctx.createOscillator();
+      const g=ctx.createGain();
+      const attack=Math.min(.025,duration*.08);
+      const release=Math.min(.16,duration*.20);
       o.type='triangle';
-      o.frequency.setValueAtTime(freq,when);
-      g.gain.setValueAtTime(.0001,when);
-      g.gain.linearRampToValueAtTime(.040,when+.045);
-      g.gain.setValueAtTime(.040,Math.max(when+.06,when+duration-.16));
-      g.gain.linearRampToValueAtTime(.0001,when+duration);
-      o.connect(g);g.connect(master);
-      o.start(when);o.stop(when+duration+.025);
+      o.frequency.setValueAtTime(f,when);
 
-      // Very quiet upper partial for a more coherent EP-like color.
-      const o2=ctx.createOscillator(),g2=ctx.createGain();
-      o2.type='sine';
-      o2.frequency.setValueAtTime(freq*2,when);
-      g2.gain.setValueAtTime(.0001,when);
-      g2.gain.linearRampToValueAtTime(.009,when+.035);
-      g2.gain.exponentialRampToValueAtTime(.0001,when+Math.min(duration,.35));
-      o2.connect(g2);g2.connect(master);
-      o2.start(when);o2.stop(when+Math.min(duration,.38));
+      g.gain.setValueAtTime(.00001,when);
+      g.gain.exponentialRampToValueAtTime(.045,when+attack);
+      g.gain.setValueAtTime(.035,Math.max(when+attack+.01,when+duration-release));
+      g.gain.exponentialRampToValueAtTime(.00001,when+duration);
+
+      o.connect(g);
+      g.connect(master);
+      o.start(when);
+      o.stop(when+duration+.02);
+
+      // Tiny second harmonic, quieter on upper voices.
+      const p=ctx.createOscillator();
+      const pg=ctx.createGain();
+      p.type='sine';
+      p.frequency.setValueAtTime(f*2,when);
+      pg.gain.setValueAtTime(.00001,when);
+      pg.gain.exponentialRampToValueAtTime(.007,when+.018);
+      pg.gain.exponentialRampToValueAtTime(.00001,when+Math.min(duration,.30));
+      p.connect(pg);pg.connect(master);
+      p.start(when);p.stop(when+Math.min(duration,.32));
     });
+    return true;
   }
 
   /*
@@ -2842,21 +2833,6 @@ showPage('scale');
     return result;
   }
 
-  function playChord(chord,when,duration){
-    const freqs=chordFrequencies(chord);
-    if(!freqs)return;
-    freqs.forEach(f=>{
-      const o=ctx.createOscillator(),g=ctx.createGain();
-      o.type='triangle'; o.frequency.setValueAtTime(f,when);
-      g.gain.setValueAtTime(.0001,when);
-      g.gain.linearRampToValueAtTime(.045,when+.06);
-      g.gain.setValueAtTime(.045,Math.max(when+.07,when+duration-.12));
-      g.gain.linearRampToValueAtTime(.0001,when+duration);
-      o.connect(g);g.connect(master);
-      o.start(when);o.stop(when+duration+.02);
-      chordVoices.push(o);
-    });
-  }
 
   let phraseEvents=[];
   let phraseDuration=0;
