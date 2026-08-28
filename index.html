@@ -3065,19 +3065,24 @@ showPage('scale');
     phraseEvents=[];
     let beat=0;
 
-    // Six-chord progression in a 4/4 bar:
-    // 1 = 1 beat, 2+3 = 1 beat, 4 = 1 beat, 5+6 = 1 beat.
-    // The two chords sharing a beat each get half a beat.
+    // Six-chord progression:
+    // [1 beat] [2+3 = 1 beat] [1 beat] [5+6 = 1 beat].
+    // That makes one 4/4 cycle. The normal phrase is 4 bars (16 beats),
+    // so repeat the six-chord cycle across all four bars instead of
+    // accidentally making the whole phrase only one quarter as long.
     if(chords.length===6){
       const six=[1,.5,.5,1,.5,.5];
-      chords.forEach((chord,i)=>{
-        phraseEvents.push({
-          chord:chord,
-          startBeat:beat,
-          durationBeats:six[i]
+      for(let cycle=0;cycle<4;cycle++){
+        const cycleStart=cycle*4;
+        chords.forEach((chord,i)=>{
+          const d=six[i];
+          phraseEvents.push({
+            chord:chord,
+            startBeat:cycleStart+six.slice(0,i).reduce((a,b)=>a+b,0),
+            durationBeats:d
+          });
         });
-        beat+=six[i];
-      });
+      }
     }else{
       for(const ev of flat){
         phraseEvents.push({chord:ev.chord,startBeat:beat,durationBeats:ev.beats});
@@ -3085,7 +3090,7 @@ showPage('scale');
       }
     }
 
-    phraseDuration=16; // always 4/4 × 4 bars
+    phraseDuration=16; // 4/4 × 4 bars
     return phraseEvents;
   }
 
