@@ -2672,35 +2672,39 @@ showPage('scale');
   let previousVoicing=null;
 
   /*
-   * Practical jazz-piano voicing engine.
+   * PRACTICAL JAZZ PIANO VOICING
    *
-   * Instead of stacking a chord from the root every time, use:
-   *   - dominant / minor / major guide tones (3rd + 7th)
-   *   - useful 9th/13th colors
-   *   - compact piano register
-   *   - minimum-motion voice leading between legal voicings
+   * The engine favors established jazz comping principles:
+   *   1) guide tones (3rd/7th) are mandatory for seventh chords;
+   *   2) dominant chords use 9/13 or requested alterations as color tones;
+   *   3) minor chords use b3/b7 with 9/11;
+   *   4) major chords use 3/7 with 9/13;
+   *   5) rootless voicings keep the bass register clear;
+   *   6) candidates are chosen by voice-leading, but only from legal
+   *      practical voicing families — not arbitrary pitch stacks.
    *
-   * The root is intentionally omitted from many 4-note voicings. The
-   * progression already tells us the harmony, and rootless voicings leave
-   * room for the bass while sounding much more like actual jazz comping.
+   * For ii–V–I this produces the familiar guide-tone movement:
+   *   Dm7: F-C  ->  G7: F-B  ->  Cmaj7: E-B
+   * with the color tones moving as little as possible around them.
    */
 
   function parseChord(chord){
     const m=String(chord||'').trim().match(/^([A-G](?:♯|#|♭|b)?)(.*)$/);
     if(!m||NOTE_INDEX[m[1]]==null)return null;
-    const root=NOTE_INDEX[m[1]], q=m[2].toLowerCase().replace(/\s+/g,'');
-    let type='maj7';
+    const root=NOTE_INDEX[m[1]];
+    const q=m[2].toLowerCase().replace(/\s+/g,'');
+    let type='maj';
     if(q.includes('m7b5')||q.includes('ø'))type='m7b5';
     else if(q.includes('dim7')||q.includes('°7'))type='dim7';
     else if(q.includes('dim'))type='dim';
-    else if(q.includes('m7'))type='m7';
     else if(q.includes('maj7')||q.includes('Δ'))type='maj7';
+    else if(q.includes('m7'))type='m7';
     else if(q.includes('7'))type='7';
     else if(q.includes('m'))type='m';
     else if(q.includes('aug')||q.includes('+'))type='aug';
-    else type='maj';
 
-    const alterations={
+    return {
+      root,type,q,
       b9:q.includes('b9')||q.includes('♭9'),
       s9:q.includes('#9')||q.includes('♯9'),
       b5:q.includes('b5')||q.includes('♭5'),
@@ -2708,84 +2712,104 @@ showPage('scale');
       b13:q.includes('b13')||q.includes('♭13'),
       s11:q.includes('#11')||q.includes('♯11')
     };
-    return {root,type,q,alterations};
   }
 
-  function pc(root,interval){return (root+interval+120)%12;}
+  function addIntervals(root,intervals){
+    return intervals.map(i=>(root+i+120)%12);
+  }
 
-  function jazzVoicingCandidates(chord){
-    const info=parseChord(chord);
-    if(!info)return [];
-    const r=info.root, a=info.alterations;
-    let templates=[];
-
+  /*
+   * These are ordered pitch-class templates, not arbitrary chord formulas.
+   * Each family deliberately contains standard rootless / shell-style jazz
+   * colors. We later select the inversion/register with best voice leading.
+   */
+  function jazzTemplates(info){
+    const r=info.root;
     if(info.type==='maj7'){
-      // 3-7-9-13, plus a few close alternatives.
-      templates=[
-        [4,11,2,9], [11,4,9,2], [4,7,11,2],
-        [7,11,2,4]
-      ];
-    }else if(info.type==='maj'){
-      templates=[
-        [4,7,2,9], [4,9,7,11], [7,2,4,9]
-      ];
-    }else if(info.type==='m7'){
-      // 3-7-9-11 is a very usable minor-jazz color.
-      templates=[
-        [3,10,2,5], [10,3,5,2], [3,7,10,2],
-        [7,10,2,3]
-      ];
-    }else if(info.type==='m'){
-      templates=[
-        [3,7,2,10], [3,10,7,2], [7,2,3,10]
-      ];
-    }else if(info.type==='7'){
-      // 3-7 with 9/13; alterations replace color tones where requested.
-      const c1=a.b9?1:a.s9?3:2;
-      const c2=a.b13?8:a.s5?6:a.b5?6:a.s11?6:9;
-      templates=[
-        [4,10,c1,c2], [10,4,c2,c1], [4,c1,10,c2],
-        [10,c2,4,c1]
-      ];
-    }else if(info.type==='m7b5'){
-      templates=[
-        [3,9,1,6], [9,3,6,1], [3,6,9,1]
-      ];
-    }else if(info.type==='dim7'||info.type==='dim'){
-      templates=[
-        [3,6,9,0], [6,9,0,3], [9,0,3,6]
-      ];
-    }else if(info.type==='aug'){
-      templates=[
-        [4,8,11,2], [8,11,2,4], [4,11,2,8]
+      return [
+        addIntervals(r,[4,11,2,9]),   // 3 7 9 13
+        addIntervals(r,[11,4,9,2]),   // 7 3 13 9
+        addIntervals(r,[4,9,11,2]),   // 3 13 7 9
+        addIntervals(r,[7,11,2,4])    // 5 7 9 3
       ];
     }
+    if(info.type==='m7'){
+      return [
+        addIntervals(r,[3,10,2,5]),   // b3 b7 9 11
+        addIntervals(r,[10,3,5,2]),   // b7 b3 11 9
+        addIntervals(r,[3,7,10,2]),   // b3 5 b7 9
+        addIntervals(r,[10,2,3,7])    // b7 9 b3 5
+      ];
+    }
+    if(info.type==='7'){
+      const ninth=info.b9?1:(info.s9?3:2);
+      const color=info.b13?8:(info.s5?8:(info.b5?6:(info.s11?6:9)));
+      return [
+        addIntervals(r,[4,10,ninth,color]), // 3 b7 9 13/alter
+        addIntervals(r,[10,4,color,ninth]), // b7 3 13/alter 9
+        addIntervals(r,[4,ninth,10,color]), // 3 9 b7 13/alter
+        addIntervals(r,[10,color,4,ninth])  // b7 13/alter 3 9
+      ];
+    }
+    if(info.type==='m7b5'){
+      return [
+        addIntervals(r,[3,10,1,6]),   // b3 b7 b9 b5
+        addIntervals(r,[10,3,6,1]),
+        addIntervals(r,[3,6,10,1])
+      ];
+    }
+    if(info.type==='dim7'||info.type==='dim'){
+      return [
+        addIntervals(r,[3,6,9,0]),
+        addIntervals(r,[6,9,0,3])
+      ];
+    }
+    if(info.type==='aug'){
+      return [
+        addIntervals(r,[4,8,11,2]),
+        addIntervals(r,[8,11,2,4])
+      ];
+    }
+    if(info.type==='m'){
+      return [
+        addIntervals(r,[3,7,2,10]),
+        addIntervals(r,[3,10,7,2])
+      ];
+    }
+    return [
+      addIntervals(r,[4,7,2,9]),
+      addIntervals(r,[4,9,7,11])
+    ];
+  }
 
+  function makeCandidates(chord){
+    const info=parseChord(chord);
+    if(!info)return [];
     const candidates=[];
-    templates.forEach(t=>{
-      // Convert pitch classes into ascending MIDI notes.
-      const pcs=t.map(x=>pc(r,x));
-      for(let inv=0;inv<pcs.length;inv++){
-        const ordered=pcs.slice(inv).concat(pcs.slice(0,inv));
-        let arr=[48+ordered[0]];
-        // First note is brought to C3-C4 range.
-        while(arr[0]<48)arr[0]+=12;
-        while(arr[0]>60)arr[0]-=12;
+
+    jazzTemplates(info).forEach(pcs=>{
+      for(let inversion=0;inversion<pcs.length;inversion++){
+        const ordered=pcs.slice(inversion).concat(pcs.slice(0,inversion));
+        let notes=[36+ordered[0]];
+        while(notes[0]<38)notes[0]+=12;
+        while(notes[0]>50)notes[0]-=12;
 
         for(let i=1;i<ordered.length;i++){
-          let n=arr[i-1]+((ordered[i]-arr[i-1]+12)%12);
-          if(n<=arr[i-1])n+=12;
-          arr.push(n);
+          let n=notes[i-1]+((ordered[i]-notes[i-1]+12)%12);
+          if(n<=notes[i-1])n+=12;
+          notes.push(n);
         }
 
-        // Keep practical piano comping range.
-        if(arr[0]>=48 && arr[arr.length-1]<=76 && (arr[3]-arr[0])<=19){
-          candidates.push(arr);
+        for(let shift=-12;shift<=12;shift+=12){
+          const c=notes.map(n=>n+shift);
+          const spread=c[c.length-1]-c[0];
+          if(c[0]>=36&&c[c.length-1]<=64&&spread<=18){
+            candidates.push(c);
+          }
         }
       }
     });
 
-    // Remove duplicate pitch sets.
     const seen=new Set();
     return candidates.filter(c=>{
       const key=c.join(',');
@@ -2795,28 +2819,30 @@ showPage('scale');
   }
 
   function makeVoicing(chord){
-    const candidates=jazzVoicingCandidates(chord);
+    const candidates=makeCandidates(chord);
     if(!candidates.length)return null;
 
     if(!previousVoicing){
-      // Start around the center of a piano's middle register.
+      // Start near C4 and prefer a compact, playable register.
       return candidates.sort((a,b)=>{
-        const aa=a.reduce((s,n)=>s+n,0)/a.length;
-        const bb=b.reduce((s,n)=>s+n,0)/b.length;
-        return Math.abs(aa-61)-Math.abs(bb-61);
+        const ca=a.reduce((s,n)=>s+n,0)/a.length;
+        const cb=b.reduce((s,n)=>s+n,0)/b.length;
+        const spreadA=a[3]-a[0],spreadB=b[3]-b[0];
+        return (Math.abs(ca-48)+spreadA*.03)-(Math.abs(cb-48)+spreadB*.03);
       })[0];
     }
 
-    let best=candidates[0],bestScore=Infinity;
+    let best=null,bestScore=Infinity;
     candidates.forEach(c=>{
-      let movement=0;
       const len=Math.min(c.length,previousVoicing.length);
+      let movement=0;
       for(let i=0;i<len;i++)movement+=Math.abs(c[i]-previousVoicing[i]);
 
-      // Strong preference for keeping guide tones in the same neighborhood.
-      const center=Math.abs((c[1]+c[2])/2-60);
+      // Penalize large leaps and overly wide stacks, but never enough to
+      // select an illegal/unmusical template over a valid jazz voicing.
+      const leap=Math.max(...c.map((n,i)=>Math.abs(n-(previousVoicing[i]??n))));
       const spread=c[3]-c[0];
-      const score=movement + center*.08 + Math.max(0,spread-16)*.6;
+      const score=movement + Math.max(0,leap-7)*1.8 + Math.max(0,spread-15)*.5;
 
       if(score<bestScore){
         bestScore=score;
@@ -2842,29 +2868,22 @@ showPage('scale');
       o.type='triangle';
       o.frequency.setValueAtTime(f,when);
 
-      // Slightly stagger the attack to imitate a soft piano comp rather
-      // than a perfectly simultaneous synthetic chord.
-      const offset=i*.008;
-      const t=when+offset;
-      g.gain.setValueAtTime(.00001,t);
-      g.gain.exponentialRampToValueAtTime(.038,t+.035);
-      g.gain.setValueAtTime(.030,Math.max(t+.05,when+duration-.18));
+      const attack=when+i*.006;
+      g.gain.setValueAtTime(.00001,attack);
+      g.gain.exponentialRampToValueAtTime(.038,attack+.035);
+      g.gain.setValueAtTime(.030,Math.max(attack+.06,when+duration-.18));
       g.gain.exponentialRampToValueAtTime(.00001,when+duration);
 
       o.connect(g);g.connect(master);
-      o.start(t);
-      o.stop(when+duration+.025);
+      o.start(attack);o.stop(when+duration+.025);
 
-      // Very quiet harmonic partial for a less sterile tone.
       const p=ctx.createOscillator(),pg=ctx.createGain();
-      p.type='sine';
-      p.frequency.setValueAtTime(f*2,when);
+      p.type='sine';p.frequency.setValueAtTime(f*2,when);
       pg.gain.setValueAtTime(.00001,when);
       pg.gain.exponentialRampToValueAtTime(.0055,when+.025);
       pg.gain.exponentialRampToValueAtTime(.00001,when+Math.min(duration,.28));
       p.connect(pg);pg.connect(master);
-      p.start(when);
-      p.stop(when+Math.min(duration,.30));
+      p.start(when);p.stop(when+Math.min(duration,.30));
     });
     return true;
   }
