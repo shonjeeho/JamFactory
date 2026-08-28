@@ -3025,8 +3025,12 @@ showPage('scale');
       ];
     }
     if(chords.length===6){
-      // One 4/4 bar: 1 | 2+3 | 4 | 5+6
-      return [{chords:chords.slice(),beats:[1,.5,.5,1,.5,.5]}];
+      // Full 4-bar / 16-beat phrase:
+      // 1 = 4 beats | 2+3 = 2+2 beats | 4 = 4 beats | 5+6 = 2+2 beats.
+      return [{
+        chords:chords.slice(),
+        beats:[4,2,2,4,2,2]
+      }];
     }
 
     const total=16,n=chords.length;
@@ -3060,29 +3064,14 @@ showPage('scale');
     phraseEvents=[];
     let beat=0;
 
-    if(chords.length===6){
-      // Repeat the six-chord 4/4 cell for all four bars.
-      for(let bar=0;bar<4;bar++){
-        let local=0;
-        flat.forEach(ev=>{
-          phraseEvents.push({
-            chord:ev.chord,
-            startBeat:bar*4+local,
-            durationBeats:ev.beats
-          });
-          local+=ev.beats;
-        });
-      }
-    }else{
-      flat.forEach(ev=>{
-        phraseEvents.push({
-          chord:ev.chord,
-          startBeat:beat,
-          durationBeats:ev.beats
-        });
-        beat+=ev.beats;
+    flat.forEach(ev=>{
+      phraseEvents.push({
+        chord:ev.chord,
+        startBeat:beat,
+        durationBeats:ev.beats
       });
-    }
+      beat+=ev.beats;
+    });
 
     phraseDuration=16;
     return phraseEvents;
