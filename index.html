@@ -2747,9 +2747,12 @@ showPage('scale');
     }
 
     if(info.type==='maj'){
+      // Plain major chords should sound clean on piano. Keep the root in the
+      // voicing and avoid putting the 9th next to the 3rd/5th in every shape.
       return [
-        {form:'A',ints:[4,7,2,9],role:'major'},
-        {form:'B',ints:[7,2,4,9],role:'major'}
+        {form:'A',ints:[0,4,7,9],role:'major'},   // 1 3 5 9
+        {form:'B',ints:[0,7,4,9],role:'major'},   // 1 5 3 9
+        {form:'C',ints:[4,7,0,9],role:'major'}    // 3 5 1 9
       ];
     }
 
@@ -2917,6 +2920,22 @@ showPage('scale');
         currPcs.forEach(x=>{if(nextPcs.has(x))score-=2.5;});
       }
 
+      // Penalize potentially harsh adjacent intervals. This is especially
+      // important for plain major/minor chords where a clean piano comp is
+      // preferred over a dense cluster.
+      for(let i=1;i<c.notes.length;i++){
+        const gap=c.notes[i]-c.notes[i-1];
+        if(gap===1)score+=22;
+        else if(gap===2)score+=7;
+        else if(gap===6)score+=2.5;
+      }
+
+      // Never favor an identical pitch stack when a nearby alternative exists.
+      if(previousVoicing && c.notes.length===previousVoicing.length &&
+         c.notes.every((n,i)=>n===previousVoicing[i])){
+        score+=9;
+      }
+
       const center=c.notes.reduce((a,b)=>a+b,0)/c.notes.length;
       score+=Math.abs(center-59)*.35;
       scored.push({candidate:c,score});
@@ -2982,32 +3001,26 @@ showPage('scale');
     const rate=Math.pow(2,(midi-root)/12);
     source.playbackRate.setValueAtTime(rate,when);
 
-    // Use substantially more of the supplied recording. The chord's
-    // duration controls only the release onset, not an abrupt sample cutoff.
+    // Middle ground between the previous short version and the very long
+    // version: enough natural piano body, but not so much high-frequency tail.
     const available=buffer.duration/rate;
-    const tail=Math.min(available,Math.max(1.25,duration+1.8));
+    const tail=Math.min(available,Math.max(.75,duration+1.25));
     const releaseAt=Math.min(
       tail-.08,
-      Math.max(.25,duration+1.05)
+      Math.max(.20,duration+.65)
     );
 
-    // Stronger level, but slightly softer for upper voices to keep the chord
-    // balanced rather than simply multiplying every note equally.
     const peak=Math.max(.34,.58-index*.035);
 
     gain.gain.setValueAtTime(.00001,when);
     gain.gain.exponentialRampToValueAtTime(peak,when+.012);
-
-    // Hold the body of the piano sound well past the chord slot.
-    gain.gain.setValueAtTime(peak*.96,when+Math.max(.08,releaseAt-.12));
-    gain.gain.exponentialRampToValueAtTime(
-      .00001,when+releaseAt
-    );
+    gain.gain.setValueAtTime(peak*.94,when+Math.max(.08,releaseAt-.14));
+    gain.gain.exponentialRampToValueAtTime(.00001,when+releaseAt);
 
     source.connect(gain);
     gain.connect(master);
     source.start(when);
-    source.stop(when+Math.min(available,releaseAt+.18));
+    source.stop(when+Math.min(available,releaseAt+.14));
   }
 
   function chordFrequencies(chord,nextChord=null){
