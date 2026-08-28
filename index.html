@@ -2634,7 +2634,7 @@ showPage('scale');
       if(!AC)throw new Error('이 브라우저는 Web Audio를 지원하지 않습니다.');
       ctx=new AC({latencyHint:'interactive'});
       master=ctx.createGain();
-      master.gain.value=.55;
+      master.gain.value=.88;
       master.connect(ctx.destination);
     }
     if(ctx.state!=='running')await ctx.resume();
@@ -2856,100 +2856,158 @@ showPage('scale');
     return pitchClassDistance(rootA,rootB);
   }
 
+  let pianoVoicingPass=0;
+
   function makeVoicing(chord,nextChord=null){
     const candidates=candidateVoicings(chord);
     if(!candidates.length)return null;
 
     const current=parseChord(chord);
     const next=parseChord(nextChord);
-    const nextGuides=guideTones(next);
     const currentGuides=guideTones(current);
-
-    let best=null,bestScore=Infinity;
+    const scored=[];
 
     candidates.forEach(c=>{
       let score=0;
 
       if(previousVoicing){
-        // Primary criterion: actual voice movement.
         for(let i=0;i<Math.min(c.notes.length,previousVoicing.length);i++){
           const d=Math.abs(c.notes[i]-previousVoicing[i]);
-          score += d*d*0.9;
-          if(d>7)score += (d-7)*5;
+          score+=d*d*.9;
+          if(d>7)score+=(d-7)*5;
         }
       }else{
         const center=c.notes.reduce((a,b)=>a+b,0)/c.notes.length;
-        score += Math.abs(center-59)*1.8;
+        score+=Math.abs(center-59)*1.8;
       }
 
-      // Guide-tone continuity is more important than generic proximity.
       if(previousChordName){
         const prev=parseChord(previousChordName);
         const prevGuides=guideTones(prev);
-        const currentGuideSet=new Set(currentGuides);
+        const set=new Set(currentGuides);
         prevGuides.forEach(pg=>{
-          if(currentGuideSet.has(pg))score-=8; // common guide tone
+          if(set.has(pg))score-=8;
           currentGuides.forEach(cg=>{
             const d=pitchClassDistance(pg,cg);
-            if(d===1)score-=5; // semitone guide-tone motion
+            if(d===1)score-=5;
             else if(d===2)score-=1.5;
           });
         });
       }
 
-      // ii->V and V->I: explicitly reward the canonical half-step
-      // guide-tone resolutions.
       if(next){
-        const role=chordRole(current), nextRole=chordRole(next);
+        const role=chordRole(current),nextRole=chordRole(next);
         if(role==='minor'&&nextRole==='dominant'){
-          // ii 7th -> V 3rd is the classic semitone connection.
-          const m7=pcAt(current.root,10), v3=pcAt(next.root,4);
-          if(pitchClassDistance(m7,v3)===1)score-=12;
+          if(pitchClassDistance(pcAt(current.root,10),pcAt(next.root,4))===1)score-=12;
         }
         if(role==='dominant'&&(nextRole==='major'||nextRole==='minor')){
-          // V 7th -> I 3rd is the other canonical semitone resolution.
-          const v7=pcAt(current.root,10);
           const tonic3=next.type==='m7'?pcAt(next.root,3):pcAt(next.root,4);
-          if(pitchClassDistance(v7,tonic3)===1)score-=14;
+          if(pitchClassDistance(pcAt(current.root,10),tonic3)===1)score-=14;
         }
 
-        // Preserve common tones between adjacent chords.
         const currPcs=new Set([
-          ...currentGuides,
-          pcAt(current.root,2), // 9
-          pcAt(current.root,5), // 11
-          pcAt(current.root,9)  // 13
+          ...currentGuides,pcAt(current.root,2),
+          pcAt(current.root,5),pcAt(current.root,9)
         ]);
+        const nextGuides=guideTones(next);
         const nextPcs=new Set([
-          ...nextGuides,
-          pcAt(next.root,2),
-          pcAt(next.root,5),
-          pcAt(next.root,9)
+          ...nextGuides,pcAt(next.root,2),
+          pcAt(next.root,5),pcAt(next.root,9)
         ]);
         currPcs.forEach(x=>{if(nextPcs.has(x))score-=2.5;});
       }
 
-      // A/B are not alternated blindly. Prefer a form that keeps the lower
-      // guide tone in a comfortable position and avoids repetitive inversions.
-      if(previousVoicing && previousChordName){
-        const prevForm=previousVoicing._form;
-        if(prevForm && c.form[0]===prevForm[0])score+=0.7;
-      }
-
-      // Avoid both extremes of the keyboard.
-      const center=c.notes.reduce((a,b)=>a+b,0)/4;
-      score+=Math.abs(center-59)*0.35;
-
-      if(score<bestScore){
-        bestScore=score;
-        best=c;
-      }
+      const center=c.notes.reduce((a,b)=>a+b,0)/c.notes.length;
+      score+=Math.abs(center-59)*.35;
+      scored.push({candidate:c,score});
     });
+
+    scored.sort((a,b)=>a.score-b.score);
+
+    // Keep the best voice-leading choices, but rotate through close candidates
+    // on repeated chords so identical chord names don't always produce the
+    // exact same pitch stack.
+    const pool=scored.slice(0,Math.min(4,scored.length));
+    const pick=Math.min(pianoVoicingPass++%Math.min(3,pool.length),pool.length-1);
+    const best=pool[pick].candidate;
 
     const result=best.notes.slice();
     result._form=best.form;
-    result._score=bestScore;
+    result._score=pool[pick].score;
     return result;
+  }
+
+  // REAL PIANO SAMPLE ENGINE — supplied C2/C3/C4 WAVs.
+  const pianoSampleFiles={
+    36:'SHIFTEE_piano_wy_C2.wav',
+    48:'SHIFTEE_piano_wy_C3.wav',
+    60:'SHIFTEE_piano_wy_C4.wav'
+  };
+  const pianoBuffers={};
+  let pianoSamplesReady=false;
+  let pianoLoadPromise=null;
+
+  async function loadPianoSamples(){
+    if(pianoSamplesReady)return;
+    if(pianoLoadPromise)return pianoLoadPromise;
+    pianoLoadPromise=(async()=>{
+      for(const root of [36,48,60]){
+        const response=await fetch(pianoSampleFiles[root]);
+        if(!response.ok)throw new Error('피아노 샘플을 불러오지 못했습니다: '+pianoSampleFiles[root]);
+        pianoBuffers[root]=await ctx.decodeAudioData(await response.arrayBuffer());
+      }
+      pianoSamplesReady=true;
+    })();
+    return pianoLoadPromise;
+  }
+
+  function nearestPianoRoot(midi){
+    // Keep transposition close to the supplied recordings.
+    // Prefer C2 for the low register, C3 for the middle, C4 for the upper
+    // register so the original piano tone is preserved as much as possible.
+    if(midi<43)return 36;
+    if(midi<55)return 48;
+    return 60;
+  }
+
+  function playPianoSample(midi,when,duration,index){
+    const root=nearestPianoRoot(midi);
+    const buffer=pianoBuffers[root];
+    if(!buffer)return;
+
+    const source=ctx.createBufferSource();
+    const gain=ctx.createGain();
+    source.buffer=buffer;
+
+    const rate=Math.pow(2,(midi-root)/12);
+    source.playbackRate.setValueAtTime(rate,when);
+
+    // Use substantially more of the supplied recording. The chord's
+    // duration controls only the release onset, not an abrupt sample cutoff.
+    const available=buffer.duration/rate;
+    const tail=Math.min(available,Math.max(1.25,duration+1.8));
+    const releaseAt=Math.min(
+      tail-.08,
+      Math.max(.25,duration+1.05)
+    );
+
+    // Stronger level, but slightly softer for upper voices to keep the chord
+    // balanced rather than simply multiplying every note equally.
+    const peak=Math.max(.34,.58-index*.035);
+
+    gain.gain.setValueAtTime(.00001,when);
+    gain.gain.exponentialRampToValueAtTime(peak,when+.012);
+
+    // Hold the body of the piano sound well past the chord slot.
+    gain.gain.setValueAtTime(peak*.96,when+Math.max(.08,releaseAt-.12));
+    gain.gain.exponentialRampToValueAtTime(
+      .00001,when+releaseAt
+    );
+
+    source.connect(gain);
+    gain.connect(master);
+    source.start(when);
+    source.stop(when+Math.min(available,releaseAt+.18));
   }
 
   function chordFrequencies(chord,nextChord=null){
@@ -2960,62 +3018,18 @@ showPage('scale');
   function playChord(chord,when,duration,nextChord=null){
     const v=makeVoicing(chord,nextChord);
     if(!v)return false;
+
     previousVoicing=v.slice();
     previousVoicing._form=v._form;
     previousChordName=chord;
 
+    if(!pianoSamplesReady){
+      loadPianoSamples().catch(()=>{});
+      return false;
+    }
+
     v.forEach((midi,i)=>{
-      const f=440*Math.pow(2,(midi-69)/12);
-
-      // Procedural acoustic-piano model:
-      // short hammer attack + inharmonic string partials + natural decay.
-      const decay=Math.max(.55,Math.min(2.6,duration*.98));
-      const attack=when+i*.004;
-
-      const partials=[
-        [1.000,1.00,'triangle'],
-        [2.001,.34,'sine'],
-        [3.004,.16,'sine'],
-        [4.010,.075,'sine'],
-        [5.020,.035,'sine'],
-        [6.035,.016,'sine']
-      ];
-
-      partials.forEach((part,k)=>{
-        const o=ctx.createOscillator();
-        const g=ctx.createGain();
-        o.type=part[2];
-        o.frequency.setValueAtTime(f*part[0],attack);
-
-        // Upper partials fade faster, like a piano string.
-        const partialDecay=decay/(1+k*.32);
-        const peak=.028*part[1]*(i===0?1.04:.92);
-
-        g.gain.setValueAtTime(.00001,attack);
-        g.gain.exponentialRampToValueAtTime(peak,attack+.008+(k*.003));
-        g.gain.exponentialRampToValueAtTime(
-          Math.max(.00001,peak*.16),
-          attack+Math.min(partialDecay*.28,.42)
-        );
-        g.gain.exponentialRampToValueAtTime(.00001,when+decay);
-
-        o.connect(g);g.connect(master);
-        o.start(attack);
-        o.stop(when+decay+.04);
-      });
-
-      // Very short hammer transient.
-      const hammer=ctx.createOscillator();
-      const hg=ctx.createGain();
-      hammer.type='triangle';
-      hammer.frequency.setValueAtTime(f*3.2,attack);
-      hammer.frequency.exponentialRampToValueAtTime(f*1.7,attack+.022);
-      hg.gain.setValueAtTime(.00001,attack);
-      hg.gain.exponentialRampToValueAtTime(.0085,attack+.003);
-      hg.gain.exponentialRampToValueAtTime(.00001,attack+.045);
-      hammer.connect(hg);hg.connect(master);
-      hammer.start(attack);
-      hammer.stop(attack+.05);
+      playPianoSample(midi,when+i*.004,duration,i);
     });
     return true;
   }
@@ -3144,6 +3158,7 @@ showPage('scale');
   async function start(){
     await initAudio();
     await loadDrums();
+    await loadPianoSamples();
     const chords=getChords();
     if(!chords.length)throw new Error('먼저 GENERATE PROGRESSION으로 코드 진행을 만들어주세요.');
     rebuildPhrase();
