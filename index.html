@@ -3064,10 +3064,27 @@ showPage('scale');
     const flat=flattenPhrase(bars);
     phraseEvents=[];
     let beat=0;
-    flat.forEach((ev)=>{
-      phraseEvents.push({chord:ev.chord,startBeat:beat,durationBeats:ev.beats});
-      beat+=ev.beats;
-    });
+
+    // Six-chord progression in a 4/4 bar:
+    // 1 = 1 beat, 2+3 = 1 beat, 4 = 1 beat, 5+6 = 1 beat.
+    // The two chords sharing a beat each get half a beat.
+    if(chords.length===6){
+      const six=[1,.5,.5,1,.5,.5];
+      chords.forEach((chord,i)=>{
+        phraseEvents.push({
+          chord:chord,
+          startBeat:beat,
+          durationBeats:six[i]
+        });
+        beat+=six[i];
+      });
+    }else{
+      for(const ev of flat){
+        phraseEvents.push({chord:ev.chord,startBeat:beat,durationBeats:ev.beats});
+        beat+=ev.beats;
+      }
+    }
+
     phraseDuration=16; // always 4/4 × 4 bars
     return phraseEvents;
   }
