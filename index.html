@@ -2741,6 +2741,14 @@ showPage('scale');
     return best;
   }
 
+  // Compatibility helper for any older prototype references.
+  // Returns the current voicing as frequencies.
+  function chordFrequencies(chord){
+    const v=makeVoicing(chord);
+    if(!v)return null;
+    return v.map(midi=>440*Math.pow(2,(midi-69)/12));
+  }
+
   function playChord(chord,when,duration){
     const voicing=makeVoicing(chord);
     if(!voicing)return;
