@@ -1016,6 +1016,19 @@ h1{letter-spacing:-.012em}
 }
 .scale-usage{display:block;margin-top:8px;color:#b99a63;font:500 13px/1.6 'Noto Sans','Pretendard',sans-serif;letter-spacing:.02em}
 .scale-formula{white-space:normal;line-height:1.7}
+
+.proto-backing{
+  margin-top:24px;padding:22px;border:1px solid rgba(253,251,212,.10);
+  border-radius:14px;background:rgba(0,0,0,.13)
+}
+.proto-grid{display:grid;grid-template-columns:150px 1fr;gap:12px;margin-top:14px}
+.proto-grid label{display:flex;flex-direction:column;gap:7px;color:var(--muted);font-size:10px;letter-spacing:.08em}
+.proto-grid input,.proto-grid select{box-sizing:border-box;width:100%;padding:11px;border:1px solid rgba(253,251,212,.12);border-radius:8px;background:#211b15;color:var(--cream)}
+.proto-readout{margin-top:14px;padding:11px 13px;border-radius:8px;background:rgba(253,251,212,.05);font-size:12px}
+.proto-play{width:100%;margin-top:13px;padding:13px;border:1px solid rgba(197,139,67,.55);border-radius:9px;background:rgba(197,139,67,.12);color:var(--cream);font-weight:700;letter-spacing:.08em;cursor:pointer}
+.proto-play.active{background:rgba(197,139,67,.22)}
+.proto-status{margin-top:9px;color:var(--muted);font-size:12px;min-height:18px}
+@media(max-width:650px){.proto-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -1388,6 +1401,26 @@ h1{letter-spacing:-.012em}
     </div>
 
     <button class="improv-random-btn" id="improvRandomBtn" type="button">GENERATE PROGRESSION</button>
+
+    <div class="proto-backing" id="protoBacking">
+      <div class="improvising-label">RHYTHM &amp; CHORD BACKING — PROTOTYPE</div>
+      <div class="proto-grid">
+        <label>BPM
+          <input id="protoBpm" type="number" min="40" max="240" step="1" value="100" inputmode="numeric">
+        </label>
+        <label>DRUM PATTERN
+          <select id="protoDrumPattern">
+            <option value="1">1 · KICK – HAT – SNARE – HAT – HAT – KICK – SNARE – HAT</option>
+            <option value="2">2 · KICK – HAT – SNARE – HAT – KICK – HAT – SNARE – HAT</option>
+            <option value="3">3 · KICK – HAT – HAT – SNARE – KICK – HAT – SNARE – HAT</option>
+            <option value="4">4 · KICK – HAT – SNARE – HAT – KICK – HAT – HAT – SNARE</option>
+          </select>
+        </label>
+      </div>
+      <div class="proto-readout" id="protoReadout">READY · 100 BPM · DRUM 1</div>
+      <button class="proto-play" id="protoPlay" type="button">▶ PLAY</button>
+      <div class="proto-status" id="protoStatus" aria-live="polite">현재 생성된 코드 진행을 반주에 사용합니다.</div>
+    </div>
   </div>
 </section>
 
@@ -2051,12 +2084,25 @@ const SCALE_USAGE={"major": "대표 코드: Maj7 · 대표 도수: I, IV · 메�
 
   async function ensureAudio(){
     if(!audio){
-      audio=new(window.AudioContext||window.webkitAudioContext)();
+      const AudioCtx=window.AudioContext||window.webkitAudioContext;
+      if(!AudioCtx) throw new Error('Web Audio API is not supported.');
+      audio=new AudioCtx({latencyHint:'interactive'});
       master=audio.createGain();
       master.gain.value=.40;
       master.connect(audio.destination);
     }
-    if(audio.state==='suspended')await audio.resume();
+
+    // iPad/Safari: resume the context directly from the user gesture.
+    if(audio.state!=='running'){
+      await audio.resume();
+    }
+
+    // Keep output on the system's default audio route (normally iPad speaker
+    // when no wired/Bluetooth audio device is connected).
+    if(typeof audio.setSinkId==='function'){
+      try{ await audio.setSinkId('default'); }catch(e){}
+    }
+
     if(sound==='drum')await decodeDrumSamples();
   }
 
@@ -2528,6 +2574,148 @@ form.addEventListener('submit',e=>{
   window.open(youtubeUrl,'_blank','noopener');
 });
 showPage('scale');
+
+/* RHYTHM & CHORD BACKING PROTOTYPE — isolated from existing V44 controls. */
+(()=>{
+  const play=document.getElementById('protoPlay');
+  const bpmEl=document.getElementById('protoBpm');
+  const patternEl=document.getElementById('protoDrumPattern');
+  const readout=document.getElementById('protoReadout');
+  const status=document.getElementById('protoStatus');
+  if(!play||!bpmEl||!patternEl)return;
+
+  let timer=null, nextTime=0, step=0, token=0, chordOscs=new Set();
+  const LOOK=0.10, TICK=25;
+
+  const patterns={
+    1:['kick','hat','snare','hat','hat','kick','snare','hat'],
+    2:['kick','hat','snare','hat','kick','hat','snare','hat'],
+    3:['kick','hat','hat','snare','kick','hat','snare','hat'],
+    4:['kick','hat','snare','hat','kick','hat','hat','snare']
+  };
+
+  function bpm(){
+    const n=Math.round(Number(bpmEl.value)||100);
+    const v=Math.max(40,Math.min(240,n));
+    bpmEl.value=v; return v;
+  }
+  function update(){
+    readout.textContent=`${running?'PLAYING':'READY'} · ${bpm()} BPM · DRUM ${patternEl.value}`;
+  }
+  function getAudio(){
+    // V44 uses these globals for its existing Web Audio engine.
+    if(typeof audio!=='undefined' && audio) return audio;
+    return null;
+  }
+  async function ensure(){
+    if(typeof ensureAudio==='function') await ensureAudio();
+    const a=getAudio();
+    if(!a) throw new Error('AudioContext를 만들 수 없습니다.');
+    if(a.state!=='running') await a.resume();
+    return a;
+  }
+  function click(when,accent=false){
+    const a=getAudio();
+    if(!a||typeof master==='undefined'||!master)return;
+    const o=a.createOscillator(), g=a.createGain();
+    o.type='square'; o.frequency.value=accent?1250:1000;
+    g.gain.setValueAtTime(.0001,when);
+    g.gain.exponentialRampToValueAtTime(accent?.25:.18,when+.002);
+    g.gain.exponentialRampToValueAtTime(.0001,when+.055);
+    o.connect(g);g.connect(master);o.start(when);o.stop(when+.065);
+  }
+  function drumSample(key,when){
+    const a=getAudio();
+    if(!a||typeof master==='undefined'||!master||typeof drumBuffers==='undefined')return;
+    const b=drumBuffers[key]; if(!b)return;
+    const s=a.createBufferSource(),g=a.createGain();
+    s.buffer=b; g.gain.value=.50; s.connect(g);g.connect(master);s.start(when);
+  }
+  function progressionChords(){
+    const el=document.getElementById('improvChords');
+    if(!el)return [];
+    return (el.textContent||'').replace(/\s+/g,' ').trim().split(/\s*[→|/]\s*|\s{2,}/).filter(Boolean);
+  }
+  function chordNotes(ch){
+    // Lightweight chord parser for prototype: root + 3rd + 5th + 7th.
+    const names={C:0,'C#':1,Db:1,D:2,'D#':3,Eb:3,E:4,F:5,'F#':6,Gb:6,G:7,'G#':8,Ab:8,A:9,'A#':10,Bb:10,B:11};
+    const m=ch.match(/^([A-G](?:#|b)?)(.*)$/); if(!m)return null;
+    let root=names[m[1]]; if(root==null)return null;
+    const q=m[2].toLowerCase();
+    let ints;
+    if(q.includes('dim')) ints=[0,3,6,9];
+    else if(q.includes('aug')||q.includes('+')) ints=[0,4,8,10];
+    else if(q.includes('m7b5')||q.includes('ø')) ints=[0,3,6,10];
+    else if(q.includes('m7')) ints=[0,3,7,10];
+    else if(q.includes('maj7')) ints=[0,4,7,11];
+    else if(q.includes('7')) ints=[0,4,7,10];
+    else if(q.includes('m')) ints=[0,3,7];
+    else ints=[0,4,7];
+    return ints.map((x,i)=>440*Math.pow(2,((root+x+48+(i?0:0))-69)/12));
+  }
+  function playChord(ch,when){
+    const a=getAudio(); if(!a||typeof master==='undefined'||!master)return;
+    const freqs=chordNotes(ch); if(!freqs)return;
+    freqs.forEach((f,i)=>{
+      const o=a.createOscillator(),g=a.createGain();
+      o.type='triangle'; o.frequency.setValueAtTime(f,when);
+      g.gain.setValueAtTime(.0001,when);
+      g.gain.exponentialRampToValueAtTime(.035,when+.025);
+      g.gain.exponentialRampToValueAtTime(.0001,when+.42);
+      o.connect(g);g.connect(master);o.start(when);o.stop(when+.45);
+      chordOscs.add(o);o.onended=()=>chordOscs.delete(o);
+    });
+  }
+  function getChords(){
+    const el=document.getElementById('improvChords');
+    const raw=(el?.textContent||'').trim();
+    // Prefer the visible chord spans/blocks if present; otherwise split common separators.
+    const parts=raw.split(/\s*(?:→|->|→|\/|\|)\s*/).map(x=>x.trim()).filter(Boolean);
+    return parts.length?parts:[raw];
+  }
+  let running=false;
+  function schedule(){
+    if(!running)return;
+    const a=getAudio(); if(!a)return;
+    while(nextTime<a.currentTime+LOOK){
+      const p=patterns[patternEl.value]||patterns[1];
+      const stepDur=(60/bpm())/2; // 8th-note grid: 2 steps per quarter
+      const hit=p[step%8];
+      if(hit==='kick'||hit==='snare')drumSample(hit,nextTime);
+      // Every 8th-note position gets a hi-hat.
+      drumSample('hat',nextTime);
+      if(step%8===0){
+        const chords=getChords();
+        const ch=chords[Math.floor(step/8)%Math.max(chords.length,1)];
+        if(ch)playChord(ch,nextTime);
+      }
+      nextTime+=stepDur; step++;
+    }
+  }
+  async function start(){
+    await ensure();
+    if(typeof decodeDrumSamples==='function')await decodeDrumSamples();
+    running=true; step=0; nextTime=getAudio().currentTime+.05;
+    play.textContent='■ STOP';play.classList.add('active');update();
+    status.textContent='코드 진행 + 드럼을 8분음표 그리드로 재생 중입니다.';
+    timer=setInterval(schedule,TICK); schedule();
+  }
+  function stop(){
+    running=false; token++;
+    if(timer){clearInterval(timer);timer=null}
+    chordOscs.forEach(o=>{try{o.stop()}catch(e){}});
+    chordOscs.clear();
+    play.textContent='▶ PLAY';play.classList.remove('active');update();
+    status.textContent='READY';
+  }
+  play.addEventListener('click',async()=>{
+    try{if(running)stop();else await start();}
+    catch(e){console.error(e);status.textContent='오디오를 시작하지 못했습니다: '+e.message;stop();}
+  });
+  bpmEl.addEventListener('input',update);
+  patternEl.addEventListener('change',update);
+  update();
+})();
 </script>
 </body>
 </html>
