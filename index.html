@@ -2966,27 +2966,56 @@ showPage('scale');
 
     v.forEach((midi,i)=>{
       const f=440*Math.pow(2,(midi-69)/12);
-      const o=ctx.createOscillator(),g=ctx.createGain();
-      o.type='triangle';
-      o.frequency.setValueAtTime(f,when);
 
-      const attack=when+i*.006;
-      g.gain.setValueAtTime(.00001,attack);
-      g.gain.exponentialRampToValueAtTime(.038,attack+.035);
-      g.gain.setValueAtTime(.030,Math.max(attack+.06,when+duration-.18));
-      g.gain.exponentialRampToValueAtTime(.00001,when+duration);
+      // Procedural acoustic-piano model:
+      // short hammer attack + inharmonic string partials + natural decay.
+      const decay=Math.max(.55,Math.min(2.6,duration*.98));
+      const attack=when+i*.004;
 
-      o.connect(g);g.connect(master);
-      o.start(attack);o.stop(when+duration+.025);
+      const partials=[
+        [1.000,1.00,'triangle'],
+        [2.001,.34,'sine'],
+        [3.004,.16,'sine'],
+        [4.010,.075,'sine'],
+        [5.020,.035,'sine'],
+        [6.035,.016,'sine']
+      ];
 
-      const p=ctx.createOscillator(),pg=ctx.createGain();
-      p.type='sine';
-      p.frequency.setValueAtTime(f*2,when);
-      pg.gain.setValueAtTime(.00001,when);
-      pg.gain.exponentialRampToValueAtTime(.0055,when+.025);
-      pg.gain.exponentialRampToValueAtTime(.00001,when+Math.min(duration,.28));
-      p.connect(pg);pg.connect(master);
-      p.start(when);p.stop(when+Math.min(duration,.30));
+      partials.forEach((part,k)=>{
+        const o=ctx.createOscillator();
+        const g=ctx.createGain();
+        o.type=part[2];
+        o.frequency.setValueAtTime(f*part[0],attack);
+
+        // Upper partials fade faster, like a piano string.
+        const partialDecay=decay/(1+k*.32);
+        const peak=.028*part[1]*(i===0?1.04:.92);
+
+        g.gain.setValueAtTime(.00001,attack);
+        g.gain.exponentialRampToValueAtTime(peak,attack+.008+(k*.003));
+        g.gain.exponentialRampToValueAtTime(
+          Math.max(.00001,peak*.16),
+          attack+Math.min(partialDecay*.28,.42)
+        );
+        g.gain.exponentialRampToValueAtTime(.00001,when+decay);
+
+        o.connect(g);g.connect(master);
+        o.start(attack);
+        o.stop(when+decay+.04);
+      });
+
+      // Very short hammer transient.
+      const hammer=ctx.createOscillator();
+      const hg=ctx.createGain();
+      hammer.type='triangle';
+      hammer.frequency.setValueAtTime(f*3.2,attack);
+      hammer.frequency.exponentialRampToValueAtTime(f*1.7,attack+.022);
+      hg.gain.setValueAtTime(.00001,attack);
+      hg.gain.exponentialRampToValueAtTime(.0085,attack+.003);
+      hg.gain.exponentialRampToValueAtTime(.00001,attack+.045);
+      hammer.connect(hg);hg.connect(master);
+      hammer.start(attack);
+      hammer.stop(attack+.05);
     });
     return true;
   }
